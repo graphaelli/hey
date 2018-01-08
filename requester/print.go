@@ -119,7 +119,6 @@ func (r *report) finalize(total time.Duration) {
 	r.avgDNS = r.avgDNS / float64(len(r.lats))
 	r.avgReq = r.avgReq / float64(len(r.lats))
 	r.avgRes = r.avgRes / float64(len(r.lats))
-	r.print()
 }
 
 func (r *report) printCSV() {
@@ -130,7 +129,7 @@ func (r *report) printCSV() {
 	}
 }
 
-func (r *report) print() {
+func (r *report) Print() {
 	if r.output == "csv" {
 		r.printCSV()
 		return
