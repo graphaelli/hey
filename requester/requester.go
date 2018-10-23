@@ -60,6 +60,10 @@ type Work struct {
 	// Request is the request to be made.
 	Request     *http.Request
 	RequestBody []byte
+	// Timeout in seconds.
+	//TODO: use Timeout only for non-streaming requests. For others set
+	//RunTimeout in client.
+	Timeout int
 
 	ReqConf *ReqConfig
 
@@ -72,13 +76,11 @@ type Work struct {
 	// H2 is an option to make HTTP/2 requests
 	H2 bool
 
-	// Timeout in seconds.
-	Timeout int
-
 	// RunTimeout in duration.
 	RunTimeout time.Duration
 
-	// Qps is the rate limit in queries per second.
+	// Non streaming: Qps is the rate limit in queries per second.
+	// Streaming: Qps is the rate limit in events per second.
 	QPS float64
 
 	// DisableCompression is an option to disable compression in response
@@ -148,8 +150,8 @@ func (b *Work) Finish() {
 	b.report.finalize(total)
 }
 
-func (b *Work) makeRequest(ctx context.Context, c *http.Client) {
-	fmt.Println("[debug] makeRequest")
+func (b *Work) makeRequest(ctx context.Context, c *http.Client, throttle <-chan time.Time) {
+	//fmt.Println("[debug] makeRequest")
 	s := time.Now()
 	var size int64
 	var code int
@@ -177,6 +179,10 @@ func (b *Work) makeRequest(ctx context.Context, c *http.Client) {
 		var pW = w
 
 		for {
+			if b.QPS > 0 {
+				<-throttle
+				fmt.Println("[debug] throttle")
+			}
 			select {
 			case <-ctx.Done():
 				fmt.Println("[debug] context done")
@@ -187,7 +193,7 @@ func (b *Work) makeRequest(ctx context.Context, c *http.Client) {
 					fmt.Println("[debug] error writing to pipe")
 					return
 				}
-				time.Sleep(100 * time.Millisecond)
+				//time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}(pWriter)
@@ -243,10 +249,10 @@ func (b *Work) makeRequest(ctx context.Context, c *http.Client) {
 }
 
 func (b *Work) runWorker(ctx context.Context, client *http.Client, n int) {
-	//var throttle <-chan time.Time
-	//if b.QPS > 0 {
-	//throttle = time.Tick(time.Duration(1e6/(b.QPS)) * time.Microsecond)
-	//}
+	var throttle <-chan time.Time
+	if b.QPS > 0 {
+		throttle = time.Tick(time.Duration(1e6/(b.QPS)) * time.Microsecond)
+	}
 
 	if b.DisableRedirects {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
@@ -260,10 +266,7 @@ func (b *Work) runWorker(ctx context.Context, client *http.Client, n int) {
 		case <-b.stopCh:
 			return
 		default:
-			//if b.QPS > 0 {
-			//<-throttle
-			//}
-			b.makeRequest(ctx, client)
+			b.makeRequest(ctx, client, throttle)
 		}
 	}
 }
