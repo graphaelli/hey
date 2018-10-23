@@ -50,12 +50,17 @@ var (
 
 	output = flag.String("o", "", "")
 
-	c  = flag.Int("c", 50, "")
-	n  = flag.Int("n", 200, "")
-	q  = flag.Float64("q", 0, "")
-	z  = flag.Duration("z", time.Duration(10)*time.Second, "")
-	t  = flag.Int("t", 10, "")
-	rt = flag.Duration("rt", time.Duration(5)*time.Second, "")
+	c = flag.Int("c", 50, "")
+	n = flag.Int("n", 200, "")
+	q = flag.Float64("q", 0, "")
+	z = flag.Duration("z", time.Duration(10)*time.Second, "")
+
+	//non streaming related
+	t = flag.Int("t", 10, "")
+
+	//streaming related
+	rt    = flag.Duration("rt", time.Duration(5)*time.Second, "")
+	pause = flag.Duration("p", time.Duration(1)*time.Millisecond, "")
 
 	h2   = flag.Bool("h2", false, "")
 	cpus = flag.Int("cpus", runtime.GOMAXPROCS(-1), "")
@@ -64,6 +69,8 @@ var (
 	disableKeepAlives  = flag.Bool("disable-keepalive", false, "")
 	disableRedirects   = flag.Bool("disable-redirects", false, "")
 	proxyAddr          = flag.String("x", "", "")
+
+	stream = flag.Bool("stream", false, "")
 )
 
 var usage = `Usage: hey [options...] <url>
@@ -102,6 +109,8 @@ Options:
   -disable-redirects    Disable following of HTTP redirects
   -cpus                 Number of used cpu cores.
                         (default for current machine is %d cores)
+
+	-stream Use streaming via http connection for sending requests. Default is false.
 `
 
 func main() {
@@ -161,14 +170,17 @@ func main() {
 		header.Set("Accept", *accept)
 	}
 
-	// set basic auth if set
-	var username, password string
-	if *authHeader != "" {
-		match, err := parseInputWithRegexp(*authHeader, authRegexp)
+	if *output != "csv" && *output != "" {
+		usageAndExit("Invalid output type; only csv is supported.")
+	}
+
+	var proxyURL *gourl.URL
+	if *proxyAddr != "" {
+		var err error
+		proxyURL, err = gourl.Parse(*proxyAddr)
 		if err != nil {
 			usageAndExit(err.Error())
 		}
-		username, password = match[1], match[2]
 	}
 
 	var bodyAll []byte
@@ -183,55 +195,68 @@ func main() {
 		bodyAll = slurp
 	}
 
-	if *output != "csv" && *output != "" {
-		usageAndExit("Invalid output type; only csv is supported.")
-	}
+	var workerReq requester.Req
+	if *stream {
+		header.Set("User-Agent", heyUA)
+		workerReq = &requester.StreamReq{
+			Header:        header,
+			Method:        method,
+			Url:           url,
+			RequestBody:   [][]byte{bodyAll},
+			Timeout:       *rt,
+			RunTimeout:    dur,
+			PauseDuration: *pause,
+			EPS:           q,
+		}
 
-	var proxyURL *gourl.URL
-	if *proxyAddr != "" {
-		var err error
-		proxyURL, err = gourl.Parse(*proxyAddr)
+	} else {
+
+		req, err := http.NewRequest(method, url, nil)
 		if err != nil {
 			usageAndExit(err.Error())
 		}
-	}
 
-	req, err := http.NewRequest(method, url, nil)
-	if err != nil {
-		usageAndExit(err.Error())
-	}
-	req.ContentLength = int64(len(bodyAll))
-	if username != "" || password != "" {
-		req.SetBasicAuth(username, password)
-	}
+		// set basic auth if set
+		var username, password string
+		if *authHeader != "" {
+			match, err := parseInputWithRegexp(*authHeader, authRegexp)
+			if err != nil {
+				usageAndExit(err.Error())
+			}
+			username, password = match[1], match[2]
+		}
 
-	// set host header if set
-	if *hostHeader != "" {
-		req.Host = *hostHeader
-	}
+		req.ContentLength = int64(len(bodyAll))
+		if username != "" || password != "" {
+			req.SetBasicAuth(username, password)
+		}
 
-	ua := req.UserAgent()
-	if ua == "" {
-		ua = heyUA
-	} else {
-		ua += " " + heyUA
-	}
-	header.Set("User-Agent", ua)
-	req.Header = header
+		// set host header if set
+		if *hostHeader != "" {
+			req.Host = *hostHeader
+		}
 
-	reqConf := &requester.ReqConfig{
-		Timeout: *rt,
+		ua := req.UserAgent()
+		if ua == "" {
+			ua = heyUA
+		} else {
+			ua += " " + heyUA
+		}
+		header.Set("User-Agent", ua)
+		req.Header = header
+
+		workerReq = &requester.SimpleReq{
+			Request:     req,
+			RequestBody: bodyAll,
+			Timeout:     *t,
+			QPS:         q,
+		}
 	}
 
 	w := &requester.Work{
-		Request:            req,
-		RequestBody:        bodyAll,
-		ReqConf:            reqConf,
+		Req:                workerReq,
 		N:                  num,
 		C:                  conc,
-		QPS:                q,
-		Timeout:            *t,
-		RunTimeout:         dur,
 		DisableCompression: *disableCompression,
 		DisableKeepAlives:  *disableKeepAlives,
 		DisableRedirects:   *disableRedirects,
