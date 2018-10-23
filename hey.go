@@ -50,11 +50,12 @@ var (
 
 	output = flag.String("o", "", "")
 
-	c = flag.Int("c", 50, "")
-	n = flag.Int("n", 200, "")
-	q = flag.Float64("q", 0, "")
-	t = flag.Int("t", 20, "")
-	z = flag.Duration("z", 0, "")
+	c  = flag.Int("c", 50, "")
+	n  = flag.Int("n", 200, "")
+	q  = flag.Float64("q", 0, "")
+	t  = flag.Int("t", 30, "")
+	rt = flag.Int("rt", 5, "")
+	z  = flag.Duration("z", 0, "")
 
 	h2   = flag.Bool("h2", false, "")
 	cpus = flag.Int("cpus", runtime.GOMAXPROCS(-1), "")
@@ -216,9 +217,14 @@ func main() {
 	header.Set("User-Agent", ua)
 	req.Header = header
 
+	reqConf := &requester.ReqConfig{
+		Timeout: *rt,
+	}
+
 	w := &requester.Work{
 		Request:            req,
 		RequestBody:        bodyAll,
+		ReqConf:            reqConf,
 		N:                  num,
 		C:                  conc,
 		QPS:                q,

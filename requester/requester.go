@@ -17,6 +17,7 @@ package requester
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -46,7 +47,7 @@ type result struct {
 	contentLength int64
 }
 
-type RequestConfig struct {
+type ReqConfig struct {
 	http.Header
 	Method, Url   string
 	Timeout       int
@@ -59,7 +60,7 @@ type Work struct {
 	Request     *http.Request
 	RequestBody []byte
 
-	RequestConf *RequestConfig
+	ReqConf *ReqConfig
 
 	// N is the total number of requests to make.
 	N int
@@ -121,7 +122,10 @@ func (b *Work) Run() {
 	//go func() {
 	//runReporter(b.report)
 	//}()
-	b.runWorkers()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(b.Timeout)*time.Second)
+	b.runWorkers(ctx)
+	cancel()
 	b.Finish()
 }
 
@@ -140,7 +144,7 @@ func (b *Work) Finish() {
 	//b.report.finalize(total)
 }
 
-func (b *Work) makeRequest(c *http.Client) {
+func (b *Work) makeRequest(parent context.Context, c *http.Client) {
 	//s := time.Now()
 	var size int64
 	var code int
@@ -161,14 +165,17 @@ func (b *Work) makeRequest(c *http.Client) {
 	body := []byte("simitt pipe test")
 	//req := cloneRequest(b.Request, b.RequestBody)
 
+	//context
+	ctx, cancel := context.WithCancel(parent)
+
 	go func(w io.WriteCloser) {
 		defer w.Close()
 		var pW = w
 
 		for i := 0; i < 20; i++ {
 			select {
-			case <-b.stopCh:
-				fmt.Println("[debug] stop channel")
+			case <-ctx.Done():
+				fmt.Println("[debug] context done")
 				return
 			default:
 				fmt.Println("[debug] write to pipe")
@@ -214,6 +221,7 @@ func (b *Work) makeRequest(c *http.Client) {
 		io.Copy(ioutil.Discard, resp.Body)
 		resp.Body.Close()
 	}
+	cancel()
 	fmt.Println(size)
 	fmt.Println(code)
 	//t := time.Now()
@@ -232,7 +240,7 @@ func (b *Work) makeRequest(c *http.Client) {
 	//}
 }
 
-func (b *Work) runWorker(client *http.Client, n int) {
+func (b *Work) runWorker(ctx context.Context, client *http.Client, n int) {
 	//var throttle <-chan time.Time
 	//if b.QPS > 0 {
 	//throttle = time.Tick(time.Duration(1e6/(b.QPS)) * time.Microsecond)
@@ -243,6 +251,7 @@ func (b *Work) runWorker(client *http.Client, n int) {
 			return http.ErrUseLastResponse
 		}
 	}
+
 	for i := 0; i < n; i++ {
 		// Check if application is stopped. Do not send into a closed channel.
 		select {
@@ -252,12 +261,12 @@ func (b *Work) runWorker(client *http.Client, n int) {
 			//if b.QPS > 0 {
 			//<-throttle
 			//}
-			b.makeRequest(client)
+			b.makeRequest(ctx, client)
 		}
 	}
 }
 
-func (b *Work) runWorkers() {
+func (b *Work) runWorkers(ctx context.Context) {
 	var wg sync.WaitGroup
 	wg.Add(b.C)
 
@@ -280,7 +289,10 @@ func (b *Work) runWorkers() {
 	// Ignore the case where b.N % b.C != 0.
 	for i := 0; i < b.C; i++ {
 		go func() {
-			b.runWorker(client, b.N/b.C)
+			connCtx, cancel := context.WithTimeout(ctx, time.Duration(b.ReqConf.Timeout)*time.Second)
+
+			b.runWorker(connCtx, client, b.N/b.C)
+			cancel()
 			wg.Done()
 		}()
 	}
