@@ -53,7 +53,7 @@ var (
 	c  = flag.Int("c", 50, "")
 	n  = flag.Int("n", 200, "")
 	q  = flag.Float64("q", 0, "")
-	z  = flag.Duration("z", time.Duration(20)*time.Second, "")
+	z  = flag.Duration("z", time.Duration(10)*time.Second, "")
 	t  = flag.Int("t", 10, "")
 	rt = flag.Duration("rt", time.Duration(5)*time.Second, "")
 

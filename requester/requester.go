@@ -118,14 +118,14 @@ func (b *Work) writer() io.Writer {
 // Run makes all the requests, prints the summary. It blocks until
 // all work is done.
 func (b *Work) Run() {
-	//b.results = make(chan *result, min(b.C*1000, maxResult))
+	b.results = make(chan *result, min(b.C*1000, maxResult))
 	b.stopCh = make(chan struct{}, b.C)
-	//b.start = time.Now()
-	//b.report = newReport(b.writer(), b.results, b.Output, b.N)
-	//// Run the reporter first, it polls the result channel until it is closed.
-	//go func() {
-	//runReporter(b.report)
-	//}()
+	b.start = time.Now()
+	b.report = newReport(b.writer(), b.results, b.Output, b.N)
+	// Run the reporter first, it polls the result channel until it is closed.
+	go func() {
+		runReporter(b.report)
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), b.RunTimeout)
 	b.runWorkers(ctx)
@@ -141,21 +141,20 @@ func (b *Work) Stop() {
 }
 
 func (b *Work) Finish() {
-	//close(b.results)
-	//total := time.Now().Sub(b.start)
+	close(b.results)
+	total := time.Now().Sub(b.start)
 	// Wait until the reporter is done.
-	//<-b.report.done
-	//b.report.finalize(total)
+	<-b.report.done
+	b.report.finalize(total)
 }
 
 func (b *Work) makeRequest(ctx context.Context, c *http.Client) {
 	fmt.Println("[debug] makeRequest")
-	//s := time.Now()
-	//var size int64
-	//var code int
+	s := time.Now()
+	var size int64
+	var code int
 	var dnsStart, connStart, resStart, reqStart, delayStart time.Time
-	var dnsDuration, connDuration, reqDuration, delayDuration time.Duration
-	//var resDuration
+	var dnsDuration, connDuration, reqDuration, delayDuration, resDuration time.Duration
 
 	pReader, pWriter := io.Pipe()
 	req, err := http.NewRequest(b.Request.Method, b.Request.URL.String(), pReader)
@@ -221,28 +220,26 @@ func (b *Work) makeRequest(ctx context.Context, c *http.Client) {
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 	resp, err := c.Do(req)
 	if err == nil {
-		//size = resp.ContentLength
-		//code = resp.StatusCode
+		size = resp.ContentLength
+		code = resp.StatusCode
 		io.Copy(ioutil.Discard, resp.Body)
 		resp.Body.Close()
 	}
 	cancel()
-	//fmt.Println(size)
-	//fmt.Println(code)
-	//t := time.Now()
-	//resDuration = t.Sub(resStart)
-	//finish := t.Sub(s)
-	//b.results <- &result{
-	//statusCode:    code,
-	//duration:      finish,
-	//err:           err,
-	//contentLength: size,
-	//connDuration:  connDuration,
-	//dnsDuration:   dnsDuration,
-	//reqDuration:   reqDuration,
-	//resDuration:   resDuration,
-	//delayDuration: delayDuration,
-	//}
+	t := time.Now()
+	resDuration = t.Sub(resStart)
+	finish := t.Sub(s)
+	b.results <- &result{
+		statusCode:    code,
+		duration:      finish,
+		err:           err,
+		contentLength: size,
+		connDuration:  connDuration,
+		dnsDuration:   dnsDuration,
+		reqDuration:   reqDuration,
+		resDuration:   resDuration,
+		delayDuration: delayDuration,
+	}
 }
 
 func (b *Work) runWorker(ctx context.Context, client *http.Client, n int) {
@@ -257,8 +254,6 @@ func (b *Work) runWorker(ctx context.Context, client *http.Client, n int) {
 		}
 	}
 
-	//connCtx, cancel := context.WithTimeout(ctx, b.ReqConf.Timeout)
-	//connCtx, cancel := context.WithTimeout(ctx, time.Duration(5)*time.Second)
 	for i := 0; i < n; i++ {
 		// Check if application is stopped. Do not send into a closed channel.
 		select {
@@ -271,7 +266,6 @@ func (b *Work) runWorker(ctx context.Context, client *http.Client, n int) {
 			b.makeRequest(ctx, client)
 		}
 	}
-	//cancel()
 }
 
 func (b *Work) runWorkers(ctx context.Context) {
