@@ -18,10 +18,10 @@ package requester
 import (
 	"bytes"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"net/http"
-	"net/http/httptrace"
 	"net/url"
 	"os"
 	"sync"
@@ -46,11 +46,20 @@ type result struct {
 	contentLength int64
 }
 
+type RequestConfig struct {
+	http.Header
+	Method, Url   string
+	Timeout       int
+	RequestBody   [][]byte
+	PauseDuration time.Duration
+}
+
 type Work struct {
 	// Request is the request to be made.
-	Request *http.Request
-
+	Request     *http.Request
 	RequestBody []byte
+
+	RequestConf *RequestConfig
 
 	// N is the total number of requests to make.
 	N int
@@ -104,14 +113,14 @@ func (b *Work) writer() io.Writer {
 // Run makes all the requests, prints the summary. It blocks until
 // all work is done.
 func (b *Work) Run() {
-	b.results = make(chan *result, min(b.C*1000, maxResult))
+	//b.results = make(chan *result, min(b.C*1000, maxResult))
 	b.stopCh = make(chan struct{}, b.C)
-	b.start = time.Now()
-	b.report = newReport(b.writer(), b.results, b.Output, b.N)
-	// Run the reporter first, it polls the result channel until it is closed.
-	go func() {
-		runReporter(b.report)
-	}()
+	//b.start = time.Now()
+	//b.report = newReport(b.writer(), b.results, b.Output, b.N)
+	//// Run the reporter first, it polls the result channel until it is closed.
+	//go func() {
+	//runReporter(b.report)
+	//}()
 	b.runWorkers()
 	b.Finish()
 }
@@ -124,46 +133,80 @@ func (b *Work) Stop() {
 }
 
 func (b *Work) Finish() {
-	close(b.results)
-	total := time.Now().Sub(b.start)
+	//close(b.results)
+	//total := time.Now().Sub(b.start)
 	// Wait until the reporter is done.
-	<-b.report.done
-	b.report.finalize(total)
+	//<-b.report.done
+	//b.report.finalize(total)
 }
 
 func (b *Work) makeRequest(c *http.Client) {
-	s := time.Now()
+	//s := time.Now()
 	var size int64
 	var code int
-	var dnsStart, connStart, resStart, reqStart, delayStart time.Time
-	var dnsDuration, connDuration, resDuration, reqDuration, delayDuration time.Duration
-	req := cloneRequest(b.Request, b.RequestBody)
-	trace := &httptrace.ClientTrace{
-		DNSStart: func(info httptrace.DNSStartInfo) {
-			dnsStart = time.Now()
-		},
-		DNSDone: func(dnsInfo httptrace.DNSDoneInfo) {
-			dnsDuration = time.Now().Sub(dnsStart)
-		},
-		GetConn: func(h string) {
-			connStart = time.Now()
-		},
-		GotConn: func(connInfo httptrace.GotConnInfo) {
-			if !connInfo.Reused {
-				connDuration = time.Now().Sub(connStart)
-			}
-			reqStart = time.Now()
-		},
-		WroteRequest: func(w httptrace.WroteRequestInfo) {
-			reqDuration = time.Now().Sub(reqStart)
-			delayStart = time.Now()
-		},
-		GotFirstResponseByte: func() {
-			delayDuration = time.Now().Sub(delayStart)
-			resStart = time.Now()
-		},
+	//var dnsStart, connStart, resStart, reqStart, delayStart time.Time
+	//var dnsDuration, connDuration, resDuration, reqDuration, delayDuration time.Duration
+
+	pReader, pWriter := io.Pipe()
+	req, err := http.NewRequest(b.Request.Method, b.Request.URL.String(), pReader)
+	if err != nil {
+		panic(err)
 	}
-	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	// deep copy of the Header
+	req.Header = make(http.Header, len(b.Request.Header))
+	for k, s := range b.Request.Header {
+		req.Header[k] = append([]string(nil), s...)
+	}
+	//body := ioutil.NopCloser(bytes.NewReader(b.RequestBody))
+	body := []byte("simitt pipe test")
+	//req := cloneRequest(b.Request, b.RequestBody)
+
+	go func(w io.WriteCloser) {
+		defer w.Close()
+		var pW = w
+
+		for i := 0; i < 20; i++ {
+			select {
+			case <-b.stopCh:
+				fmt.Println("[debug] stop channel")
+				return
+			default:
+				fmt.Println("[debug] write to pipe")
+				if _, err := pW.Write(body); err != nil {
+					fmt.Println("[debug] error writing to pipe")
+					return
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}(pWriter)
+
+	//trace := &httptrace.ClientTrace{
+	//DNSStart: func(info httptrace.DNSStartInfo) {
+	//dnsStart = time.Now()
+	//},
+	//DNSDone: func(dnsInfo httptrace.DNSDoneInfo) {
+	//dnsDuration = time.Now().Sub(dnsStart)
+	//},
+	//GetConn: func(h string) {
+	//connStart = time.Now()
+	//},
+	//GotConn: func(connInfo httptrace.GotConnInfo) {
+	//if !connInfo.Reused {
+	//connDuration = time.Now().Sub(connStart)
+	//}
+	//reqStart = time.Now()
+	//},
+	//WroteRequest: func(w httptrace.WroteRequestInfo) {
+	//reqDuration = time.Now().Sub(reqStart)
+	//delayStart = time.Now()
+	//},
+	//GotFirstResponseByte: func() {
+	//delayDuration = time.Now().Sub(delayStart)
+	//resStart = time.Now()
+	//},
+	//}
+	//req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 	resp, err := c.Do(req)
 	if err == nil {
 		size = resp.ContentLength
@@ -171,27 +214,29 @@ func (b *Work) makeRequest(c *http.Client) {
 		io.Copy(ioutil.Discard, resp.Body)
 		resp.Body.Close()
 	}
-	t := time.Now()
-	resDuration = t.Sub(resStart)
-	finish := t.Sub(s)
-	b.results <- &result{
-		statusCode:    code,
-		duration:      finish,
-		err:           err,
-		contentLength: size,
-		connDuration:  connDuration,
-		dnsDuration:   dnsDuration,
-		reqDuration:   reqDuration,
-		resDuration:   resDuration,
-		delayDuration: delayDuration,
-	}
+	fmt.Println(size)
+	fmt.Println(code)
+	//t := time.Now()
+	//resDuration = t.Sub(resStart)
+	//finish := t.Sub(s)
+	//b.results <- &result{
+	//statusCode:    code,
+	//duration:      finish,
+	//err:           err,
+	//contentLength: size,
+	//connDuration:  connDuration,
+	//dnsDuration:   dnsDuration,
+	//reqDuration:   reqDuration,
+	//resDuration:   resDuration,
+	//delayDuration: delayDuration,
+	//}
 }
 
 func (b *Work) runWorker(client *http.Client, n int) {
-	var throttle <-chan time.Time
-	if b.QPS > 0 {
-		throttle = time.Tick(time.Duration(1e6/(b.QPS)) * time.Microsecond)
-	}
+	//var throttle <-chan time.Time
+	//if b.QPS > 0 {
+	//throttle = time.Tick(time.Duration(1e6/(b.QPS)) * time.Microsecond)
+	//}
 
 	if b.DisableRedirects {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
@@ -204,9 +249,9 @@ func (b *Work) runWorker(client *http.Client, n int) {
 		case <-b.stopCh:
 			return
 		default:
-			if b.QPS > 0 {
-				<-throttle
-			}
+			//if b.QPS > 0 {
+			//<-throttle
+			//}
 			b.makeRequest(client)
 		}
 	}
