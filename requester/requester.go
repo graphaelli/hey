@@ -23,6 +23,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"sync"
@@ -50,7 +51,7 @@ type result struct {
 type ReqConfig struct {
 	http.Header
 	Method, Url   string
-	Timeout       int
+	Timeout       time.Duration
 	RequestBody   [][]byte
 	PauseDuration time.Duration
 }
@@ -73,6 +74,9 @@ type Work struct {
 
 	// Timeout in seconds.
 	Timeout int
+
+	// RunTimeout in duration.
+	RunTimeout time.Duration
 
 	// Qps is the rate limit in queries per second.
 	QPS float64
@@ -123,7 +127,7 @@ func (b *Work) Run() {
 	//runReporter(b.report)
 	//}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(b.Timeout)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), b.RunTimeout)
 	b.runWorkers(ctx)
 	cancel()
 	b.Finish()
@@ -144,12 +148,14 @@ func (b *Work) Finish() {
 	//b.report.finalize(total)
 }
 
-func (b *Work) makeRequest(parent context.Context, c *http.Client) {
+func (b *Work) makeRequest(ctx context.Context, c *http.Client) {
+	fmt.Println("[debug] makeRequest")
 	//s := time.Now()
-	var size int64
-	var code int
-	//var dnsStart, connStart, resStart, reqStart, delayStart time.Time
-	//var dnsDuration, connDuration, resDuration, reqDuration, delayDuration time.Duration
+	//var size int64
+	//var code int
+	var dnsStart, connStart, resStart, reqStart, delayStart time.Time
+	var dnsDuration, connDuration, reqDuration, delayDuration time.Duration
+	//var resDuration
 
 	pReader, pWriter := io.Pipe()
 	req, err := http.NewRequest(b.Request.Method, b.Request.URL.String(), pReader)
@@ -165,20 +171,19 @@ func (b *Work) makeRequest(parent context.Context, c *http.Client) {
 	body := []byte("simitt pipe test")
 	//req := cloneRequest(b.Request, b.RequestBody)
 
-	//context
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancel := context.WithTimeout(ctx, b.ReqConf.Timeout)
 
 	go func(w io.WriteCloser) {
 		defer w.Close()
 		var pW = w
 
-		for i := 0; i < 20; i++ {
+		for {
 			select {
 			case <-ctx.Done():
 				fmt.Println("[debug] context done")
 				return
 			default:
-				fmt.Println("[debug] write to pipe")
+				//fmt.Println("[debug] write to pipe")
 				if _, err := pW.Write(body); err != nil {
 					fmt.Println("[debug] error writing to pipe")
 					return
@@ -188,42 +193,42 @@ func (b *Work) makeRequest(parent context.Context, c *http.Client) {
 		}
 	}(pWriter)
 
-	//trace := &httptrace.ClientTrace{
-	//DNSStart: func(info httptrace.DNSStartInfo) {
-	//dnsStart = time.Now()
-	//},
-	//DNSDone: func(dnsInfo httptrace.DNSDoneInfo) {
-	//dnsDuration = time.Now().Sub(dnsStart)
-	//},
-	//GetConn: func(h string) {
-	//connStart = time.Now()
-	//},
-	//GotConn: func(connInfo httptrace.GotConnInfo) {
-	//if !connInfo.Reused {
-	//connDuration = time.Now().Sub(connStart)
-	//}
-	//reqStart = time.Now()
-	//},
-	//WroteRequest: func(w httptrace.WroteRequestInfo) {
-	//reqDuration = time.Now().Sub(reqStart)
-	//delayStart = time.Now()
-	//},
-	//GotFirstResponseByte: func() {
-	//delayDuration = time.Now().Sub(delayStart)
-	//resStart = time.Now()
-	//},
-	//}
-	//req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
+	trace := &httptrace.ClientTrace{
+		DNSStart: func(info httptrace.DNSStartInfo) {
+			dnsStart = time.Now()
+		},
+		DNSDone: func(dnsInfo httptrace.DNSDoneInfo) {
+			dnsDuration = time.Now().Sub(dnsStart)
+		},
+		GetConn: func(h string) {
+			connStart = time.Now()
+		},
+		GotConn: func(connInfo httptrace.GotConnInfo) {
+			if !connInfo.Reused {
+				connDuration = time.Now().Sub(connStart)
+			}
+			reqStart = time.Now()
+		},
+		WroteRequest: func(w httptrace.WroteRequestInfo) {
+			reqDuration = time.Now().Sub(reqStart)
+			delayStart = time.Now()
+		},
+		GotFirstResponseByte: func() {
+			delayDuration = time.Now().Sub(delayStart)
+			resStart = time.Now()
+		},
+	}
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), trace))
 	resp, err := c.Do(req)
 	if err == nil {
-		size = resp.ContentLength
-		code = resp.StatusCode
+		//size = resp.ContentLength
+		//code = resp.StatusCode
 		io.Copy(ioutil.Discard, resp.Body)
 		resp.Body.Close()
 	}
 	cancel()
-	fmt.Println(size)
-	fmt.Println(code)
+	//fmt.Println(size)
+	//fmt.Println(code)
 	//t := time.Now()
 	//resDuration = t.Sub(resStart)
 	//finish := t.Sub(s)
@@ -252,6 +257,8 @@ func (b *Work) runWorker(ctx context.Context, client *http.Client, n int) {
 		}
 	}
 
+	//connCtx, cancel := context.WithTimeout(ctx, b.ReqConf.Timeout)
+	//connCtx, cancel := context.WithTimeout(ctx, time.Duration(5)*time.Second)
 	for i := 0; i < n; i++ {
 		// Check if application is stopped. Do not send into a closed channel.
 		select {
@@ -264,6 +271,7 @@ func (b *Work) runWorker(ctx context.Context, client *http.Client, n int) {
 			b.makeRequest(ctx, client)
 		}
 	}
+	//cancel()
 }
 
 func (b *Work) runWorkers(ctx context.Context) {
@@ -289,10 +297,7 @@ func (b *Work) runWorkers(ctx context.Context) {
 	// Ignore the case where b.N % b.C != 0.
 	for i := 0; i < b.C; i++ {
 		go func() {
-			connCtx, cancel := context.WithTimeout(ctx, time.Duration(b.ReqConf.Timeout)*time.Second)
-
-			b.runWorker(connCtx, client, b.N/b.C)
-			cancel()
+			b.runWorker(ctx, client, b.N/b.C)
 			wg.Done()
 		}()
 	}
