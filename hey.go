@@ -53,13 +53,9 @@ var (
 	c = flag.Int("c", 50, "")
 	n = flag.Int("n", 200, "")
 	q = flag.Float64("q", 0, "")
-	z = flag.Duration("z", time.Duration(10)*time.Second, "")
+	z = flag.Duration("z", time.Duration(30)*time.Second, "")
 
-	//non streaming related
-	t = flag.Int("t", 10, "")
-
-	//streaming related
-	rt    = flag.Duration("rt", time.Duration(5)*time.Second, "")
+	t     = flag.Int("t", 10, "")
 	pause = flag.Duration("p", time.Duration(1)*time.Millisecond, "")
 
 	h2   = flag.Bool("h2", false, "")
@@ -91,8 +87,6 @@ Options:
   -H  Custom HTTP header. You can specify as many as needed by repeating the flag.
       For example, -H "Accept: text/html" -H "Content-Type: application/xml" .
   -t  Timeout for each request in seconds. Default is 20, use 0 for infinite. Only used for non-streaming.
-  -rt Duration for each request in seconds. Default is 5s, use 0 for infinite. Only used for streaming.
-      Examples: -z 10s -z 3m.
   -A  HTTP Accept header.
   -d  HTTP request body.
   -D  HTTP request body from file. For example, /home/user/file.txt or ./file.txt.
@@ -203,7 +197,7 @@ func main() {
 			Method:        method,
 			Url:           url,
 			RequestBody:   [][]byte{bodyAll},
-			Timeout:       *rt,
+			Timeout:       time.Duration(*t),
 			RunTimeout:    dur,
 			PauseDuration: *pause,
 			EPS:           q,

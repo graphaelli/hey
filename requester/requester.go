@@ -352,7 +352,7 @@ func (b *Work) runWorkers(ctx context.Context) {
 	wg.Wait()
 }
 
-// cloneRequest returns a clone of the provided *http.Requestuest.
+// cloneRequest returns a clone of the provided *http.Request.
 // The clone is a shallow copy of the struct and its Header map.
 func cloneRequest(r *http.Request, body []byte) *http.Request {
 	// shallow copy of the struct
