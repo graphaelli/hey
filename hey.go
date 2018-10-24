@@ -197,7 +197,7 @@ func main() {
 			Method:        method,
 			Url:           url,
 			RequestBody:   [][]byte{bodyAll},
-			Timeout:       time.Duration(*t),
+			Timeout:       time.Duration(*t) * time.Second,
 			RunTimeout:    dur,
 			PauseDuration: *pause,
 			EPS:           q,
