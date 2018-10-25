@@ -141,7 +141,7 @@ func (r *SimpleReq) makeRequest(ctx context.Context, throttle <-chan time.Time) 
 }
 
 func (r *SimpleReq) ctxRun() (context.Context, context.CancelFunc) {
-	return nil, func() {}
+	return context.TODO(), func() {}
 }
 
 func (r *SimpleReq) clientTimeout() time.Duration {
