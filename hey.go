@@ -46,7 +46,6 @@ var (
 	accept      = flag.String("A", "", "")
 	contentType = flag.String("T", "text/html", "")
 	authHeader  = flag.String("a", "", "")
-	hostHeader  = flag.String("host", "", "")
 
 	output = flag.String("o", "", "")
 
@@ -75,9 +74,11 @@ Options:
   -n  Number of requests to run. Default is 200.
   -c  Number of requests to run concurrently. Total number of requests cannot
       be smaller than the concurrency level. Default is 50.
-  -q  Rate limit, in queries per second (QPS). Default is no rate limit.
+  -q  Rate limit, if 'stream' is false it defines 'queries per second', otherwise 'events per second'. 
+			Default is no rate limit.
   -z  Duration of application to send requests. When duration is reached,
       application stops and exits. If duration is specified, n is ignored.
+			Default is 30 seconds.
       Examples: -z 10s -z 3m.
   -o  Output type. If none provided, a summary is printed.
       "csv" is the only supported alternative. Dumps the response
@@ -86,7 +87,7 @@ Options:
   -m  HTTP method, one of GET, POST, PUT, DELETE, HEAD, OPTIONS.
   -H  Custom HTTP header. You can specify as many as needed by repeating the flag.
       For example, -H "Accept: text/html" -H "Content-Type: application/xml" .
-  -t  Timeout for each request in seconds. Default is 20, use 0 for infinite. Only used for non-streaming.
+  -t  Timeout for each request in seconds. Default is 10, use 0 for infinite.
   -A  HTTP Accept header.
   -d  HTTP request body.
   -D  HTTP request body from file. For example, /home/user/file.txt or ./file.txt.
@@ -94,8 +95,6 @@ Options:
   -a  Basic authentication, username:password.
   -x  HTTP Proxy address as host:port.
   -h2 Enable HTTP/2.
-
-  -host	HTTP Host header.
 
   -disable-compression  Disable compression.
   -disable-keepalive    Disable keep-alive, prevents re-use of TCP
@@ -189,14 +188,34 @@ func main() {
 		bodyAll = slurp
 	}
 
+	// retrieve username and password
+	var username, password string
+	if *authHeader != "" {
+		match, err := parseInputWithRegexp(*authHeader, authRegexp)
+		if err != nil {
+			usageAndExit(err.Error())
+		}
+		username, password = match[1], match[2]
+	}
+
+	// add user agent to header
+	ua := header.Get("User-Agent")
+	if ua == "" {
+		ua = heyUA
+	} else {
+		ua += " " + heyUA
+	}
+	header.Set("User-Agent", ua)
+
 	var workerReq requester.Req
 	if *stream {
-		header.Set("User-Agent", heyUA)
 		workerReq = &requester.StreamReq{
-			Header:        header,
 			Method:        method,
 			Url:           url,
 			RequestBody:   [][]byte{bodyAll},
+			Header:        header,
+			Username:      username,
+			Password:      password,
 			Timeout:       time.Duration(*t) * time.Second,
 			RunTimeout:    dur,
 			PauseDuration: *pause,
@@ -209,34 +228,11 @@ func main() {
 		if err != nil {
 			usageAndExit(err.Error())
 		}
-
-		// set basic auth if set
-		var username, password string
-		if *authHeader != "" {
-			match, err := parseInputWithRegexp(*authHeader, authRegexp)
-			if err != nil {
-				usageAndExit(err.Error())
-			}
-			username, password = match[1], match[2]
-		}
-
 		req.ContentLength = int64(len(bodyAll))
+
 		if username != "" || password != "" {
 			req.SetBasicAuth(username, password)
 		}
-
-		// set host header if set
-		if *hostHeader != "" {
-			req.Host = *hostHeader
-		}
-
-		ua := req.UserAgent()
-		if ua == "" {
-			ua = heyUA
-		} else {
-			ua += " " + heyUA
-		}
-		header.Set("User-Agent", ua)
 		req.Header = header
 
 		workerReq = &requester.SimpleReq{

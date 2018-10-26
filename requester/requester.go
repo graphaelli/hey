@@ -49,9 +49,11 @@ type result struct {
 }
 
 type StreamReq struct {
-	Header      http.Header
 	Method, Url string
 	RequestBody [][]byte
+	Header      http.Header
+	Username    string
+	Password    string
 
 	// Timeout per request in duration.
 	Timeout time.Duration
@@ -72,6 +74,11 @@ func (r *StreamReq) makeRequest(ctx context.Context, throttle <-chan time.Time) 
 	if err != nil {
 		panic(err)
 	}
+	//set auth
+	if r.Username != "" || r.Password != "" {
+		req.SetBasicAuth(r.Username, r.Password)
+	}
+
 	// deep copy of the Header
 	req.Header = make(http.Header, len(r.Header))
 	for k, s := range r.Header {
